@@ -1,275 +1,490 @@
 #include <Arduino.h>
 #include <esp_dmx.h>
 #include <array>
+#include <WiFi.h>
+#include <WebServer.h>
 
-/* First, lets define the hardware pins that we are using with our ESP32. We
-  need to define which pin is transmitting data and which pin is receiving data.
-  DMX circuits also often need to be told when we are transmitting and when we
-  are receiving data. We can do this by defining an enable pin. */
-int transmitPin = 5; //17;
-int receivePin = -1; //5; //16;
-int enablePin = -1; //6; //21;
-/* Make sure to double-check that these pins are compatible with your ESP32!
-  Some ESP32s, such as the ESP32-WROVER series, do not allow you to read or
-  write data on pins 16 or 17, so it's always good to read the manuals. */
+/* Hardware pins for the ESP32 */
+int transmitPin = 5;
+int receivePin = -1;
+int enablePin = -1;
 
-/* Next, lets decide which DMX port to use. The ESP32 has either 2 or 3 ports.
-  Port 0 is typically used to transmit serial data back to your Serial Monitor,
-  so we shouldn't use that port. Lets use port 1! */
+/* DMX port to use */
 dmx_port_t dmxPort = 1;
 
-/* Now we want somewhere to store our DMX data. Since a single packet of DMX
-  data can be up to 513 bytes long, we want our array to be at least that long.
-  This library knows that the max DMX packet size is 513, so we can fill in the
-  array size with `DMX_PACKET_SIZE`. */
-//byte mData[DMX_PACKET_SIZE];
+/* Wi-Fi credentials */
+//const char* ssid = "YourSSID";      // Replace with your Wi-Fi SSID
+//const char* password = "YourPassword";  // Replace with your Wi-Fi Password
+#include "credentials.h"
 
-/* This variable will allow us to update our packet and print to the Serial
-  Monitor at a regular interval. */
-unsigned long lastUpdate = millis();
-class ThreeChannelsModeDmxData
-{
-  public:
-  enum class Mode : uint8_t
-  {
-    LASER_OFF=0,
-    SOUND_MODE = 101,
-    AUTO_MODE = 156
-  };
-  ThreeChannelsModeDmxData()
-  {
-    mData.fill(0);
-    setMode(Mode::AUTO_MODE);
-    setManualPatternSize(120);
-  }
-  void setMode(Mode mode)
-  {
-    mMode=mode;
-    mData[1] = static_cast<uint8_t>(mode);
-  }
-  void setManualPatternSize(uint8_t value)
-  {
-    mManualPatternSize=value;
-    mData[3] = value;
-  }
-  const uint8_t *getData() const
-  {
-    return mData.data();
-  }
-  size_t getPacketSize() const
-  {
-    return mData.size();
-  }
-  private:
-  // ch 1: Zooming (0-127: manual pattern size, 128-255: loop zooming in/out)
-  uint8_t mManualPatternSize{0u}; // 0-127, manual pattern size
-  uint8_t mLoopZoomingInOut{128u}; // 128-255, loop zooming in/out
-  // ch 3: Mode (0-100: laser off, 101-155: Sound Mode, 156-255 Auto mode with rising speed 0-100)
-//  uint8_t mMode{0u}; // 0-100, laser off
-  Mode mMode;
-  std::array<uint8_t,DMX_PACKET_SIZE> mData{};
+/* Web server running on port 80 */
+WebServer server(80);
 
-};
 class NineChannelsModeDmxData
 {
-  public:
-  enum class Mode : uint8_t
-  {
-    LASER_OFF=0,
-    AUTO_MODE = 64,
-    SOUND_MODE = 128,
-    DMX_MODE = 192
-  };
-  NineChannelsModeDmxData()
-  {
-    mData.fill(0);
-    setMode(NineChannelsModeDmxData::Mode::DMX_MODE);
-    //setPatternValue(0);
-    //setManualPatternSize(127);
-    //setVerticalMovingSpeed(5);
+public:
+    enum class Mode : uint8_t
+    {
+        LASER_OFF = 0,
+        AUTO_MODE = 64,
+        SOUND_MODE = 128,
+        DMX_MODE = 192
+    };
 
-  }
-  void setMode(NineChannelsModeDmxData::Mode mode)
-  {
-    mMode=mode;
-    mData[1] = static_cast<uint8_t>(mode);
-  }
-  void setPatternValue(uint8_t value)
-  {
-    mPatternValue=value;
-    mData[3] = value*8;
-  }
-  void setManualPatternSize(uint8_t value) // 0-127
-  {
-    mManualPatternSize=value;
-    mData[4] = 127-value;
-  }
-  void setLoopZoomingInOut(uint8_t value)
-  {
-    mLoopZoomingInOut=value+128;
-    mData[4] = mLoopZoomingInOut;
-  }
-  void setXAxisRolling(uint8_t value)
-  {
-    mXAxisRolling=value;
-    mData[5] = value;
-  }
-  void setXRollingSpeed(uint8_t value)
-  {
-    mXRollingSpeed=value+128;
-    mData[5] = mXRollingSpeed;
-  }
-  void setYAxisRolling(uint8_t value)
-  {
-    mYAxisRolling=value;
-    mData[6] = value;
-  }
-  void setYRollingSpeed(uint8_t value)
-  {
-    mYRollingSpeed=value+128;
-    mData[6] = mYRollingSpeed;
-  }
-  void setZAxisRolling(uint8_t value)
-  {
-    mZAxisRolling=value;
-    mData[7] = value;
-  }
-  void setZRollingSpeed(uint8_t value)
-  {
-    mZRollingSpeed=value+128;
-    mData[7] = mZRollingSpeed;
-  }
-  void setXAxisManualPosition(uint8_t value)
-  {
-    mXAxisManualPosition=value;
-    mData[8] = value;
-  }
-  void setHorizontalMovingSpeed(uint8_t value)
-  {
-    mHorizontalMovingSpeed=value+128;
-    mData[8] = mHorizontalMovingSpeed;
-  }
-  void setYAxisManualPosition(uint8_t value)
-  {
-    mYAxisManualPosition=value;
-    mData[9] = value;
-  }
-  void setVerticalMovingSpeed(uint8_t value)
-  {
-    mVerticalMovingSpeed=value+128;
-    mData[9] = mVerticalMovingSpeed;
-  }
+    NineChannelsModeDmxData()
+    {
+        mData.fill(0);
+        setMode(NineChannelsModeDmxData::Mode::DMX_MODE);
+    }
 
-  const uint8_t *getData() const
-  {
-    return mData.data();
-  }
-  size_t getPacketSize() const
-  {
-    return mData.size();
-  }
+    void setMode(NineChannelsModeDmxData::Mode mode)
+    {
+        mMode = mode;
+        mData[1] = static_cast<uint8_t>(mode);
+    }
+
+    Mode getMode() const
+    {
+        return mMode;
+    }
+
+    void setPatternValue(uint8_t value)
+    {
+        mPatternValue = value;
+        mData[3] = value * 8;
+    }
+
+    uint8_t getPatternValue() const
+    {
+        return mPatternValue;
+    }
+
+    // Zooming (Channel 4)
+    void setZoomMode(bool manual)
+    {
+        mZoomManual = manual;
+        updateZoomChannel();
+    }
+
+    bool getZoomMode() const
+    {
+        return mZoomManual;
+    }
+
+    void setZoomValue(uint8_t value)
+    {
+        mZoomValue = value;
+        updateZoomChannel();
+    }
+
+    uint8_t getZoomValue() const
+    {
+        return mZoomValue;
+    }
+
+    // X Axis Rolling (Channel 5)
+    void setXAxisRollingMode(bool manual)
+    {
+        mXRollingManual = manual;
+        updateXAxisRollingChannel();
+    }
+
+    bool getXAxisRollingMode() const
+    {
+        return mXRollingManual;
+    }
+
+    void setXAxisRollingValue(uint8_t value)
+    {
+        mXAxisRollingValue = value;
+        updateXAxisRollingChannel();
+    }
+
+    uint8_t getXAxisRollingValue() const
+    {
+        return mXAxisRollingValue;
+    }
+
+    // Y Axis Rolling (Channel 6)
+    void setYAxisRollingMode(bool manual)
+    {
+        mYRollingManual = manual;
+        updateYAxisRollingChannel();
+    }
+
+    bool getYAxisRollingMode() const
+    {
+        return mYRollingManual;
+    }
+
+    void setYAxisRollingValue(uint8_t value)
+    {
+        mYAxisRollingValue = value;
+        updateYAxisRollingChannel();
+    }
+
+    uint8_t getYAxisRollingValue() const
+    {
+        return mYAxisRollingValue;
+    }
+
+    // Z Axis Rolling (Channel 7)
+    void setZAxisRollingMode(bool manual)
+    {
+        mZRollingManual = manual;
+        updateZAxisRollingChannel();
+    }
+
+    bool getZAxisRollingMode() const
+    {
+        return mZRollingManual;
+    }
+
+    void setZAxisRollingValue(uint8_t value)
+    {
+        mZAxisRollingValue = value;
+        updateZAxisRollingChannel();
+    }
+
+    uint8_t getZAxisRollingValue() const
+    {
+        return mZAxisRollingValue;
+    }
+
+    // X Axis Moving (Channel 8)
+    void setXAxisMovingMode(bool manual)
+    {
+        mXMovingManual = manual;
+        updateXAxisMovingChannel();
+    }
+
+    bool getXAxisMovingMode() const
+    {
+        return mXMovingManual;
+    }
+
+    void setXAxisMovingValue(uint8_t value)
+    {
+        mXAxisMovingValue = value;
+        updateXAxisMovingChannel();
+    }
+
+    uint8_t getXAxisMovingValue() const
+    {
+        return mXAxisMovingValue;
+    }
+
+    // Y Axis Moving (Channel 9)
+    void setYAxisMovingMode(bool manual)
+    {
+        mYMovingManual = manual;
+        updateYAxisMovingChannel();
+    }
+
+    bool getYAxisMovingMode() const
+    {
+        return mYMovingManual;
+    }
+
+    void setYAxisMovingValue(uint8_t value)
+    {
+        mYAxisMovingValue = value;
+        updateYAxisMovingChannel();
+    }
+
+    uint8_t getYAxisMovingValue() const
+    {
+        return mYAxisMovingValue;
+    }
+
+    const uint8_t* getData() const
+    {
+        return mData.data();
+    }
+
+    size_t getPacketSize() const
+    {
+        return mData.size();
+    }
+
 private:
-  std::array<uint8_t,DMX_PACKET_SIZE> mData{};
-  // ch 1: mode select
-  Mode mMode; 
-  // ch 3: pattern select
-  uint8_t mPatternValue{0u}; // 0-31 -> 0-255
-  // ch 4: zooming
-  uint8_t mManualPatternSize{0u}; // 0-127, manual pattern size
-  uint8_t mLoopZoomingInOut{128u}; // 128-255, loop zooming in/out
-  // ch 5: X axis rolling
-  uint8_t mXAxisRolling{0u}; // 0-127, manual rolling
-  uint8_t mXRollingSpeed{128u}; // 128-255, rolling speed
-  // ch 6: Y axis rolling
-  uint8_t mYAxisRolling{0u}; // 0-127, manual rolling
-  uint8_t mYRollingSpeed{128u}; // 128-255, rolling speed
-  // ch 7: Z axis rolling
-  uint8_t mZAxisRolling{0u}; // 0-127, manual rolling
-  uint8_t mZRollingSpeed{128u}; // 128-255, rolling speed
-  // ch 8: X axis moving
-  uint8_t mXAxisManualPosition{0u}; // 0-127, horizontal manual position
-  uint8_t mHorizontalMovingSpeed{128u}; // 128-255, horizontal moving speed
-  // ch 9: Y axis moving
-  uint8_t mYAxisManualPosition{0u}; // 0-127, vertical manual position
-  uint8_t mVerticalMovingSpeed{128u}; // 128-255, vertical moving speed
-  
+    std::array<uint8_t, DMX_PACKET_SIZE> mData{};
+    Mode mMode;
+    uint8_t mPatternValue{0u};
+
+    // Zooming (Channel 4)
+    bool mZoomManual{true};
+    uint8_t mZoomValue{64u};
+
+    void updateZoomChannel()
+    {
+        if (mZoomManual)
+            mData[4] = 127 - mZoomValue;  // Manual Pattern Size (0-127)
+        else
+            mData[4] = mZoomValue + 128;  // Loop Zooming In/Out Speed (128-255)
+    }
+
+    // X Axis Rolling (Channel 5)
+    bool mXRollingManual{true};
+    uint8_t mXAxisRollingValue{64u};
+
+    void updateXAxisRollingChannel()
+    {
+        if (mXRollingManual)
+            mData[5] = mXAxisRollingValue;  // Manual Rolling (0-127)
+        else
+            mData[5] = mXAxisRollingValue + 128;  // Rolling Speed (128-255)
+    }
+
+    // Y Axis Rolling (Channel 6)
+    bool mYRollingManual{true};
+    uint8_t mYAxisRollingValue{64u};
+
+    void updateYAxisRollingChannel()
+    {
+        if (mYRollingManual)
+            mData[6] = mYAxisRollingValue;  // Manual Rolling (0-127)
+        else
+            mData[6] = mYAxisRollingValue + 128;  // Rolling Speed (128-255)
+    }
+
+    // Z Axis Rolling (Channel 7)
+    bool mZRollingManual{true};
+    uint8_t mZAxisRollingValue{64u};
+
+    void updateZAxisRollingChannel()
+    {
+        if (mZRollingManual)
+            mData[7] = mZAxisRollingValue;  // Manual Rolling (0-127)
+        else
+            mData[7] = mZAxisRollingValue + 128;  // Rolling Speed (128-255)
+    }
+
+    // X Axis Moving (Channel 8)
+    bool mXMovingManual{true};
+    uint8_t mXAxisMovingValue{64u};
+
+    void updateXAxisMovingChannel()
+    {
+        if (mXMovingManual)
+            mData[8] = mXAxisMovingValue;  // Manual Position (0-127)
+        else
+            mData[8] = mXAxisMovingValue + 128;  // Moving Speed (128-255)
+    }
+
+    // Y Axis Moving (Channel 9)
+    bool mYMovingManual{true};
+    uint8_t mYAxisMovingValue{64u};
+
+    void updateYAxisMovingChannel()
+    {
+        if (mYMovingManual)
+            mData[9] = mYAxisMovingValue;  // Manual Position (0-127)
+        else
+            mData[9] = mYAxisMovingValue + 128;  // Moving Speed (128-255)
+    }
 };
 
-void setup() {
-  /* Start the serial connection back to the computer so that we can log
-    messages to the Serial Monitor. Lets set the baud rate to 115200. */
-  Serial.begin(115200);
-//  memset(data, 0, DMX_PACKET_SIZE);
-  delay(1000); // Give us time to open the Serial Monitor.
-  Serial.println("Starting DMX Controller");
-
-
-  /* Now we will install the DMX driver! We'll tell it which DMX port to use,
-    what device configuration to use, and what DMX personalities it should have.
-    If you aren't sure which configuration to use, you can use the macros
-    `DMX_CONFIG_DEFAULT` to set the configuration to its default settings.
-    Because the device is being setup as a DMX controller, this device won't use
-    any DMX personalities. */
-  dmx_config_t config = DMX_CONFIG_DEFAULT;
-  dmx_personality_t personalities[] = {};
-  int personality_count = 0;
-  dmx_driver_install(dmxPort, &config, personalities, personality_count);
-
-  /* Now set the DMX hardware pins to the pins that we want to use and setup
-    will be complete! */
-  dmx_set_pin(dmxPort, transmitPin, receivePin, enablePin);
-}
-//ThreeChannelsModeDmxData dmxData;
 NineChannelsModeDmxData dmxData;
-void loop() {
-  #if 0
-  /* Get the current time since boot in milliseconds so that we can find out how
-    long it has been since we last updated data and printed to the Serial
-    Monitor. */
-  unsigned long now = millis();
 
-  if (now - lastUpdate >= 1000) {
-    /* Increment every byte in our packet. Notice we don't increment the zeroeth
-      byte, since that is our DMX start code. Then we must write our changes to
-      the DMX packet. */
-    for (int i = 1; i < DMX_PACKET_SIZE; i++) {
-      data[i]++;
+/* Handler for the root path */
+void handleRoot()
+{
+    String html = "<html><head><title>DMX Controller</title><script>";
+
+    // JavaScript function to toggle visibility
+    html += R"(
+    function toggleVisibility(control, isManual) {
+        var manualInput = document.getElementById(control + 'ManualValue');
+        var speedInput = document.getElementById(control + 'SpeedValue');
+        if (isManual) {
+            manualInput.style.display = 'block';
+            speedInput.style.display = 'none';
+        } else {
+            manualInput.style.display = 'none';
+            speedInput.style.display = 'block';
+        }
     }
-    dmx_write(dmxPort, data, DMX_PACKET_SIZE);
+    )";
 
-    /* Log our changes to the Serial Monitor. */
-    Serial.printf("Sending DMX 0x%02X\n", data[1]);
-    lastUpdate = now;
-  }
-  #endif
-  for (uint8_t patternValue = 0; patternValue < 32; ++patternValue)
-  {
-    dmxData.setPatternValue(patternValue);
-    //for (uint8_t manualPatternSize = 120; manualPatternSize < 255-120; ++manualPatternSize)
+    html += "</script></head><body>";
+    html += "<h1>DMX Controller Settings</h1>";
+    html += "<form action=\"/set\" method=\"POST\">";
+
+    // Mode selection
+    html += "Mode: <select name=\"mode\">";
+    NineChannelsModeDmxData::Mode currentMode = dmxData.getMode();
+    html += "<option value=\"0\"" + String(currentMode == NineChannelsModeDmxData::Mode::LASER_OFF ? " selected" : "") + ">Laser Off</option>";
+    html += "<option value=\"64\"" + String(currentMode == NineChannelsModeDmxData::Mode::AUTO_MODE ? " selected" : "") + ">Auto Mode</option>";
+    html += "<option value=\"128\"" + String(currentMode == NineChannelsModeDmxData::Mode::SOUND_MODE ? " selected" : "") + ">Sound Mode</option>";
+    html += "<option value=\"192\"" + String(currentMode == NineChannelsModeDmxData::Mode::DMX_MODE ? " selected" : "") + ">DMX Mode</option>";
+    html += "</select><br><br>";
+
+    // Pattern Value
+    html += "Pattern Value (0-31): <input type=\"number\" name=\"patternValue\" min=\"0\" max=\"31\" value=\"" + String(dmxData.getPatternValue()) + "\"><br><br>";
+
+    // Controls
+    struct Control {
+        String name;
+        String displayName;
+        bool manualMode;
+        uint8_t value;
+    };
+
+    // List of controls
+    Control controls[] = {
+        {"zoom", "Zooming Control", dmxData.getZoomMode(), dmxData.getZoomValue()},
+        {"xAxisRolling", "X Axis Rolling Control", dmxData.getXAxisRollingMode(), dmxData.getXAxisRollingValue()},
+        {"yAxisRolling", "Y Axis Rolling Control", dmxData.getYAxisRollingMode(), dmxData.getYAxisRollingValue()},
+        {"zAxisRolling", "Z Axis Rolling Control", dmxData.getZAxisRollingMode(), dmxData.getZAxisRollingValue()},
+        {"xAxisMoving", "X Axis Moving Control", dmxData.getXAxisMovingMode(), dmxData.getXAxisMovingValue()},
+        {"yAxisMoving", "Y Axis Moving Control", dmxData.getYAxisMovingMode(), dmxData.getYAxisMovingValue()}
+    };
+
+    for (const auto& control : controls)
     {
-      uint8_t manualPatternSize = 127;
-      //auto patternSize = manualPatternSize<128?manualPatternSize:255-manualPatternSize;
-      //dmxData.setManualPatternSize(patternSize);
-      dmxData.setManualPatternSize(manualPatternSize);
-      for (uint8_t rollingValue = 0; rollingValue < 128 ; rollingValue++)
-      {
-        //dmxData.setYAxisRolling(rollingValue);
-        //dmxData.setXAxisRolling(rollingValue);
-        //dmxData.setZAxisRolling((rollingValue<<1)&0x7F);
-        dmxData.setXAxisManualPosition(rollingValue);
-        dmx_write(dmxPort, dmxData.getData(), dmxData.getPacketSize());
-        dmx_send(dmxPort);
-        dmx_wait_sent(dmxPort, DMX_TIMEOUT_TICK);
-        delay(30);
-      }
-    }
-    delay(500);
-  }
-#if 0
-      dmx_write(dmxPort, dmxData.getData(), 512);
-      dmx_send(dmxPort);
-      dmx_wait_sent(dmxPort, DMX_TIMEOUT_TICK);
-      delay(1000);
-#endif
+        html += "<h3>" + control.displayName + "</h3>";
+        String manualChecked = control.manualMode ? "checked" : "";
+        String speedChecked = !control.manualMode ? "checked" : "";
 
+        html += "<input type=\"radio\" name=\"" + control.name + "Mode\" id=\"" + control.name + "Manual\" value=\"manual\" " + manualChecked + " onclick=\"toggleVisibility('" + control.name + "', true)\"> Manual";
+        html += "<input type=\"radio\" name=\"" + control.name + "Mode\" id=\"" + control.name + "Speed\" value=\"speed\" " + speedChecked + " onclick=\"toggleVisibility('" + control.name + "', false)\"> Speed<br>";
+
+        // Manual Input
+        html += "<div id=\"" + control.name + "ManualValue\" style=\"display:" + (control.manualMode ? "block" : "none") + ";\">";
+        html += control.displayName + " (0-127): ";
+        html += "<input type=\"number\" name=\"" + control.name + "ManualValue\" min=\"0\" max=\"127\" value=\"" + String(control.manualMode ? control.value : 0) + "\"><br><br>";
+        html += "</div>";
+
+        // Speed Input
+        html += "<div id=\"" + control.name + "SpeedValue\" style=\"display:" + (!control.manualMode ? "block" : "none") + ";\">";
+        html += control.displayName + " Speed (0-127): ";
+        html += "<input type=\"number\" name=\"" + control.name + "SpeedValue\" min=\"0\" max=\"127\" value=\"" + String(!control.manualMode ? control.value : 0) + "\"><br><br>";
+        html += "</div>";
+    }
+
+    html += "<input type=\"submit\" value=\"Set Parameters\">";
+    html += "</form>";
+
+    // Initialize visibility
+    html += "<script>";
+    for (const auto& control : controls)
+    {
+        html += "toggleVisibility('" + control.name + "', " + (control.manualMode ? "true" : "false") + ");";
+    }
+    html += "</script>";
+
+    html += "</body></html>";
+
+    server.send(200, "text/html", html);
+}
+
+/* Handler for setting parameters */
+void handleSet()
+{
+    if (server.method() == HTTP_POST)
+    {
+        // Mode
+        if (server.hasArg("mode"))
+        {
+            int modeValue = server.arg("mode").toInt();
+            NineChannelsModeDmxData::Mode mode = static_cast<NineChannelsModeDmxData::Mode>(modeValue);
+            dmxData.setMode(mode);
+        }
+
+        // Pattern Value
+        if (server.hasArg("patternValue"))
+        {
+            int patternValue = server.arg("patternValue").toInt();
+            dmxData.setPatternValue(patternValue);
+        }
+
+        // Controls
+        struct Control {
+            String name;
+            std::function<void(bool)> setMode;
+            std::function<void(uint8_t)> setValue;
+        };
+
+        Control controls[] = {
+            {"zoom", [&](bool manual){ dmxData.setZoomMode(manual); }, [&](uint8_t value){ dmxData.setZoomValue(value); }},
+            {"xAxisRolling", [&](bool manual){ dmxData.setXAxisRollingMode(manual); }, [&](uint8_t value){ dmxData.setXAxisRollingValue(value); }},
+            {"yAxisRolling", [&](bool manual){ dmxData.setYAxisRollingMode(manual); }, [&](uint8_t value){ dmxData.setYAxisRollingValue(value); }},
+            {"zAxisRolling", [&](bool manual){ dmxData.setZAxisRollingMode(manual); }, [&](uint8_t value){ dmxData.setZAxisRollingValue(value); }},
+            {"xAxisMoving", [&](bool manual){ dmxData.setXAxisMovingMode(manual); }, [&](uint8_t value){ dmxData.setXAxisMovingValue(value); }},
+            {"yAxisMoving", [&](bool manual){ dmxData.setYAxisMovingMode(manual); }, [&](uint8_t value){ dmxData.setYAxisMovingValue(value); }}
+        };
+
+        for (auto& control : controls)
+        {
+            if (server.hasArg(control.name + "Mode"))
+            {
+                bool manual = server.arg(control.name + "Mode") == "manual";
+                control.setMode(manual);
+                if (manual && server.hasArg(control.name + "ManualValue"))
+                {
+                    int value = server.arg(control.name + "ManualValue").toInt();
+                    control.setValue(value);
+                }
+                else if (!manual && server.hasArg(control.name + "SpeedValue"))
+                {
+                    int value = server.arg(control.name + "SpeedValue").toInt();
+                    control.setValue(value);
+                }
+            }
+        }
+
+        server.sendHeader("Location", "/");
+        server.send(303);
+    }
+    else
+    {
+        server.send(405, "text/plain", "Method Not Allowed");
+    }
+}
+
+void setup()
+{
+    Serial.begin(115200);
+    delay(1000);
+    Serial.println("Starting DMX Controller");
+
+    /* Connect to Wi-Fi */
+    WiFi.begin(ssid, password);
+
+    Serial.print("Connecting to Wi-Fi");
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        delay(1000);
+        Serial.print(".");
+    }
+    Serial.println("\nConnected!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+
+    /* Set up the web server */
+    server.on("/", handleRoot);
+    server.on("/set", handleSet);
+    server.begin();
+    Serial.println("HTTP server started");
+
+    /* Install the DMX driver */
+    dmx_config_t config = DMX_CONFIG_DEFAULT;
+    dmx_personality_t personalities[] = {};
+    int personality_count = 0;
+    dmx_driver_install(dmxPort, &config, personalities, personality_count);
+
+    /* Set the DMX hardware pins */
+    dmx_set_pin(dmxPort, transmitPin, receivePin, enablePin);
+}
+
+void loop()
+{
+    server.handleClient();
+
+    /* Send the DMX data with current parameters */
+    dmx_write(dmxPort, dmxData.getData(), dmxData.getPacketSize());
+    dmx_send(dmxPort);
+    dmx_wait_sent(dmxPort, DMX_TIMEOUT_TICK);
+    delay(30);
 }
