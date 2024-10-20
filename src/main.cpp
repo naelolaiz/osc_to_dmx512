@@ -40,7 +40,7 @@ class ThreeChannelsModeDmxData
   {
     mData.fill(0);
     setMode(Mode::AUTO_MODE);
-    setManualPatternSize(80);
+    setManualPatternSize(120);
   }
   void setMode(Mode mode)
   {
@@ -56,7 +56,7 @@ class ThreeChannelsModeDmxData
   {
     return mData.data();
   }
-  uint8_t getPacketSize() const
+  size_t getPacketSize() const
   {
     return mData.size();
   }
@@ -84,8 +84,8 @@ class NineChannelsModeDmxData
   {
     mData.fill(0);
     setMode(NineChannelsModeDmxData::Mode::DMX_MODE);
-    setPatternValue(5);
-    setManualPatternSize(100);
+    //setPatternValue(0);
+    //setManualPatternSize(127);
     //setVerticalMovingSpeed(5);
 
   }
@@ -99,10 +99,10 @@ class NineChannelsModeDmxData
     mPatternValue=value;
     mData[3] = value*8;
   }
-  void setManualPatternSize(uint8_t value)
+  void setManualPatternSize(uint8_t value) // 0-127
   {
     mManualPatternSize=value;
-    mData[4] = value;
+    mData[4] = 127-value;
   }
   void setLoopZoomingInOut(uint8_t value)
   {
@@ -164,7 +164,7 @@ class NineChannelsModeDmxData
   {
     return mData.data();
   }
-  uint8_t getPacketSize() const
+  size_t getPacketSize() const
   {
     return mData.size();
   }
@@ -245,14 +245,23 @@ void loop() {
   for (uint8_t patternValue = 0; patternValue < 32; ++patternValue)
   {
     dmxData.setPatternValue(patternValue);
-    for (uint8_t manualPatternSize = 0; manualPatternSize < 255; ++manualPatternSize)
+    //for (uint8_t manualPatternSize = 120; manualPatternSize < 255-120; ++manualPatternSize)
     {
-      auto patternSize = manualPatternSize<128?manualPatternSize:255-manualPatternSize;
-      dmxData.setManualPatternSize(patternSize);
-      dmx_write(dmxPort, dmxData.getData(), 512);//dmxData.getPacketSize());
-      dmx_send(dmxPort);
-      dmx_wait_sent(dmxPort, DMX_TIMEOUT_TICK);
-      delay(60);
+      uint8_t manualPatternSize = 127;
+      //auto patternSize = manualPatternSize<128?manualPatternSize:255-manualPatternSize;
+      //dmxData.setManualPatternSize(patternSize);
+      dmxData.setManualPatternSize(manualPatternSize);
+      for (uint8_t rollingValue = 0; rollingValue < 128 ; rollingValue++)
+      {
+        //dmxData.setYAxisRolling(rollingValue);
+        //dmxData.setXAxisRolling(rollingValue);
+        //dmxData.setZAxisRolling((rollingValue<<1)&0x7F);
+        dmxData.setXAxisManualPosition(rollingValue);
+        dmx_write(dmxPort, dmxData.getData(), dmxData.getPacketSize());
+        dmx_send(dmxPort);
+        dmx_wait_sent(dmxPort, DMX_TIMEOUT_TICK);
+        delay(30);
+      }
     }
     delay(500);
   }
